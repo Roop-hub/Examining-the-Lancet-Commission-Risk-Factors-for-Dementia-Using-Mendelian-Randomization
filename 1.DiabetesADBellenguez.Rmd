@@ -1,0 +1,152 @@
+---
+title: "Diabetes-AD-Bellenguez2022"
+author: "Roopal Desai"
+date: "07/04/2022"
+output: pdf_document
+---
+---
+
+```{r}
+rm(list=ls())
+```
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+library("plyr") 
+library("tidyverse")
+library("stringr") 
+library("vroom") 
+library("data.table") 
+library("MendelianRandomization") 
+library("ieugwasr")
+```
+
+# 1. Read in the data for Diabetes Mellitus and create the genetic instrument at genome wide signifcance level 
+
+```{r}
+#Data=from Diabetes from Scott et al., 2017 
+#Chromosome and position based on build 37/hg19
+#Allele 1 and Allele 2 (aligned to the forward strand)
+#Effect for the Allele 1 and corresponding Standard Error 
+
+DM <- read.delim("/Volumes/One Touch/Papers /11. RiskfactorsMRpaper /Data/Diabetes Mellitus type ii/METAANALYSIS_DIAGRAM_SE1.txt")
+head(DM)
+```
+
+```{r}
+DM = DM %>% select("Chr.Position","Allele1","Allele2","Effect","StdErr","P.value")
+DM = DM %>% dplyr::rename(DM_a1 = Allele1, DM_a2 = Allele2, DM_beta = Effect, DM_se = StdErr, DM_pval = P.value)
+
+dim(DM)
+```
+
+```{r}
+#Separate the column Chr.Position into two separate columns 
+
+DM <-DM %>% separate(Chr.Position, c("chr", "pos"), ":")
+
+head(DM)
+```
+```{r}
+#read in the variant file which contains the rsids and base position and Chromosome for UKBB and is built on GRCH37  
+annot <- vroom("/Volumes/One Touch/Papers /11. RiskfactorsMRpaper /Data/Blood Pressure/UKBioBankData/variants.tsv.bgz")
+head(annot)
+annot= annot %>% select("chr", "pos", "rsid")
+```
+
+
+```{r}
+DM.iv = DM[which(DM$DM_pval <5*10^-8),]
+head(DM.iv)
+```
+
+```{r}
+DMmerged.iv =merge(x=annot, y=DM.iv, by=c("chr", "pos"))
+```
+
+#2. Read in the data for Alzheimer's disease 
+
+```{r}
+#AD data from Bellenguez et al., 2022 
+#Chromosome and position based on build GRCh38
+AD.data <- vroom("/Volumes/One Touch/Papers /11. RiskfactorsMRpaper /Data/Alzheimer's Disease/Bellenguez 2022/GCST90027158_buildGRCh38.tsv")
+head(AD.data)
+```
+
+```{r}
+AD.data = AD.data %>% select("variant_id","effect_allele","other_allele","beta","standard_error","p_value")
+AD.data = AD.data %>% dplyr::rename(AD_effectallele = effect_allele, AD_noneffectallele = other_allele, AD_beta_not_aligned = beta, AD_se = standard_error, AD_pval = p_value)
+```
+
+# 3. Merge the two data sets 
+
+```{r}
+
+colnames(AD.data)[1]=("rsid")
+data.merge =merge(DMmerged.iv, AD.data, by="rsid") 
+
+dim(data.merge)
+```
+# 4. Harmonise and Prune the merged data 
+
+```{r}
+
+# Create a TRUE/FALSE vector to indicate if DM_a1 is equal to AD_effectallele. 
+
+table((data.merge$DM_a1) == data.merge$AD_effectallele)
+table((data.merge$DM_a1) == data.merge$AD_noneffectallele)
+```
+
+```{r}
+
+# The harmonisation of the effect alleles can be performed as below in this case we are just creating the variable AD_beta as all the alleles are aligned 
+
+data.merge$AD_beta = ifelse((data.merge$DM_a1) == data.merge$AD_effectallele, 
+                                data.merge$AD_beta_not_aligned, -1*data.merge$AD_beta_not_aligned)
+```
+
+```{r}
+
+#Clump and prune
+
+#The final step is to prune or clump the SNPs. Pruning removes SNPs which are correlated 
+# (measured by the squared correlation r2). From a group of correlated SNPs it retains the one with the 
+# lowest $p$-value for the exposure. Use the function ieugwasr::ld_clump to prune the data. 
+#The algorithm needs to know the rs identifier of the genetic variants (labeled as rsid) and 
+#the $p$-value of the risk factor or exposure (labeled as pval). Rename the following columns accordingly:
+
+colnames(data.merge)[1]="rsid"
+colnames(data.merge)[8]="pval"
+
+
+data.clump = ieugwasr::ld_clump(data.merge)
+dim(data.clump)
+```
+
+```{r}
+#Calculate instrument strength
+F=mean((data.merge$DM_beta/data.merge$DM_se)^2)
+F
+```
+
+# 5. Run the Mendelian Randomization 
+
+
+```{r}
+rs = data.clump$rsid
+DM_beta = data.clump$DM_beta
+DM_se = data.clump$DM_se
+AD_beta = data.clump$AD_beta
+AD_se = data.clump$AD_se
+
+mr.input = mr_input(bx = DM_beta, bxse = DM_se, by = AD_beta, byse = AD_se, 
+                    exposure = "Diabetes", outcome = "Alzheimer's Disease", snps = rs)
+mr_ivw(mr.input)
+mr_plot(mr.input, interactive=FALSE)
+
+```
+```{r}
+mr_allmethods(mr.input)
+mr_plot(mr_allmethods(mr.input, method = "main"))
+```
+
+
