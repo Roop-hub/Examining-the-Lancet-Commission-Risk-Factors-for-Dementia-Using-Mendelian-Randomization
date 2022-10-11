@@ -1,0 +1,175 @@
+---
+title: "BMI-AD-Bellenguez2022"
+author: "Roopal Desai"
+date: "07/04/2022"
+output: pdf_document
+---
+
+```{r}
+rm(list=ls())
+```
+
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+library("plyr") 
+library("tidyverse")
+library("stringr") 
+library("vroom") 
+library("data.table") 
+library("MendelianRandomization") 
+library("ieugwasr")
+```
+
+
+# 1. Read in the data for BMI and create the genetic instrument at genome wide signifcance level 
+
+```{r}
+#BMI data from Pulit et al., 2018
+#Chromosome and position based on build hg 18 and then lifted to hg19
+#A1 is tested allele (effect)
+#A2 is other allele (non effect)
+BMI.data <- vroom("/Volumes/One Touch/Papers /11. RiskfactorsMRpaper /Data/BMI/bmi.giant-ukbb.meta-analysis.combined.23May2018.txt")
+
+head(BMI.data)
+
+BMI.data = BMI.data %>% select("SNP","Tested_Allele","Other_Allele","BETA","SE","P")
+
+BMI.data = BMI.data %>% dplyr::rename(BMI_a1 = Tested_Allele, BMI_a2 = Other_Allele, BMI_beta = BETA, BMI_se = SE, BMI_pval = P)
+```
+
+```{r}
+BMI.iv = BMI.data[BMI.data$BMI_pval < 5*10^(-8),]
+dim(BMI.iv)
+```
+
+#2. Read in the data for Alzheimer's disease 
+
+```{r}
+#AD data from Bellenguez et al., 2022 
+#Chromosome and position based on build GRCh38
+AD.data <- vroom("/Volumes/One Touch/Papers /11. RiskfactorsMRpaper /Data/Alzheimer's Disease/Bellenguez 2022/GCST90027158_buildGRCh38.tsv")
+head(AD.data)
+```
+
+
+```{r}
+AD.data = AD.data %>% select("variant_id","effect_allele","other_allele","beta","standard_error","p_value")
+AD.data = AD.data %>% dplyr::rename(AD_effectallele = effect_allele, AD_noneffectallele = other_allele, AD_beta_not_aligned = beta, AD_se = standard_error, AD_pval = p_value)
+```
+
+
+# 3. Merge the two data sets 
+
+```{r}
+#Separate the SNP column in the BMI data (as currently it contains 
+#information on the rsid plus the alleles)
+
+BMI.iv<-BMI.iv %>% separate(SNP, c("SNP", "Allele", "allele"), ":")
+head(BMI.iv)
+
+```
+
+
+```{r}
+
+BMI.iv = BMI.iv %>% select("SNP","BMI_a1","BMI_a2","BMI_beta","BMI_se","BMI_pval")
+```
+
+```{r}
+head(BMI.iv)
+```
+
+
+```{r}
+
+colnames(AD.data)[1]=("SNP")
+
+data.merge =merge(BMI.iv, AD.data, by="SNP") 
+head(data.merge)
+```
+
+
+```{r}
+dim(data.merge)
+```
+
+
+# 4. Harmonise and Prune the merged data 
+
+```{r}
+
+# Create a TRUE/FALSE vector to indicate if BMI_a1 is equal to AD_effectallele. 
+
+table((data.merge$BMI_a1) == data.merge$AD_effectallele)
+table((data.merge$BMI_a1) == data.merge$AD_noneffectallele)
+
+```
+
+
+
+```{r}
+
+inconsistent=which((data.merge$BMI_a1) != data.merge$AD_effectallele 
+                   & (data.merge$BMI_a1) != data.merge$AD_noneffectallele)
+data.merge[inconsistent,]
+data.merge = data.merge[-inconsistent,]
+dim(data.merge)
+```
+
+```{r}
+
+# The harmonisation of the effect alleles can be performed as follows: 
+
+data.merge$AD_beta = ifelse((data.merge$BMI_a1) == data.merge$AD_effectallele, 
+                                data.merge$AD_beta_not_aligned, -1*data.merge$AD_beta_not_aligned)
+```
+
+```{r}
+#Clump and prune
+#The algorithm needs to know the rs identifier of the genetic variants (labeled as rsid) and 
+#the $p$-value of the risk factor or exposure (labeled as pval). Rename the following columns accordingly:
+
+colnames(data.merge)[1]="rsid"
+colnames(data.merge)[6]="pval"
+
+data.clump = ieugwasr::ld_clump(data.merge)
+
+```
+
+```{r}
+dim(data.clump)
+```
+
+```{r}
+write.csv(data.clump, file = "BMIADClumpedPrunedBellenguez.csv")
+```
+
+```{r}
+#Calculate instrument strength
+F=mean((data.merge$BMI_beta/data.merge$BMI_se)^2)
+F
+```
+
+# 5. Run the Mendelian Randomization 
+```{r}
+rs = data.clump$rsid
+BMI_beta = data.clump$BMI_beta
+BMI_se = data.clump$BMI_se
+AD_beta = data.clump$AD_beta
+AD_se = data.clump$AD_se
+
+mr.input = mr_input(bx = BMI_beta, bxse = BMI_se, by = AD_beta, byse = AD_se, 
+                    exposure = "BMI", outcome = "AD", snps = rs)
+MR <-mr_ivw(mr.input)
+mr_plot(mr.input, interactive=FALSE)
+MR$Pvalue
+```
+
+
+
+```{r}
+MRALL<-  mr_allmethods(mr.input)
+mr_plot(mr_allmethods(mr.input, method = "main"))
+
+```
+
