@@ -1,0 +1,164 @@
+---
+title: "SBP-AD-Bellenguez2022"
+author: "Roopal Desai"
+date: "07/04/2022"
+output: pdf_document
+---
+```{r}
+rm(list=ls())
+```
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+library("plyr") 
+library("tidyverse")
+library("stringr") 
+library("vroom") 
+library("data.table") 
+library("MendelianRandomization") 
+library("ieugwasr")
+```
+
+# 1. Read in the data for Systolic Blood Pressure (SBP) and create the genetic instrument at genome wide signifcance level 
+
+```{r}
+#SBP data from UKBioBank 
+##variant identifier in the form "chr:pos:ref:alt" where "ref" is aligned to the #forward strand of GRCh37 and "alt" is the effect allele 
+
+SBP.data <- vroom("/Volumes/One Touch/Papers /11. RiskfactorsMRpaper /Data/Blood Pressure/UKBioBankData/Systolic Blood Pressure row 4080/4080_irnt.gwas.imputed_v3.both_sexes.tsv.bgz")
+```
+
+
+```{r}
+head(SBP.data)
+```
+
+```{r}
+SBP.data = SBP.data %>% select("variant","beta","se","pval")
+SBP.data = SBP.data %>% dplyr::rename(SBP_beta=beta, SBP_se=se,SBP_pval=pval)
+dim(SBP.data)
+```
+
+```{r}
+#read in the variant file which contains the rsids for the UKBB data 
+annot <- vroom("/Volumes/One Touch/Papers /11. RiskfactorsMRpaper /Data/Blood Pressure/UKBioBankData/variants.tsv.bgz")
+annot= annot %>% select("variant", "rsid", "ref", "alt")
+annot=annot %>% dplyr::rename(SBP_a1=alt, SBP_a2=ref)
+```
+
+```{r}
+SBPmerged =merge(x=annot, y=SBP.data, by="variant", sort=FALSE)
+dim(SBPmerged)
+```
+
+```{r}
+SBP.iv = SBPmerged[which(SBPmerged$SBP_pval < 5*10^-8),]
+dim(SBP.iv)
+```
+
+
+```{r}
+head(SBP.iv)
+```
+
+#2. Read in the data for Alzheimer's disease 
+
+```{r}
+#AD data from Bellenguez et al., 2022 
+#Chromosome and position based on build GRCh38
+AD.data <- vroom("/Volumes/One Touch/Papers /11. RiskfactorsMRpaper /Data/Alzheimer's Disease/Bellenguez 2022/GCST90027158_buildGRCh38.tsv")
+head(AD.data)
+```
+
+```{r}
+dim(AD.data)
+```
+
+```{r}
+AD.data = AD.data %>% select ("variant_id","effect_allele","other_allele","beta","standard_error","p_value")
+AD.data = AD.data %>% dplyr::rename(rsid= variant_id, AD_effectallele = effect_allele, AD_noneffectallele = other_allele, AD_beta_not_aligned = beta, AD_se = standard_error, AD_pval = p_value)
+```
+
+# 3. Merge the two data sets 
+
+
+```{r}
+data.merge =merge(SBP.iv, AD.data, by="rsid") 
+head(data.merge)
+```
+
+
+```{r}
+dim(data.merge)
+```
+
+# 4. Harmonise and Prune the merged data 
+
+```{r}
+
+# Create a TRUE/FALSE vector to indicate if SBP_a1 is equal to AD_effectallele. 
+
+table((data.merge$SBP_a1) == data.merge$AD_effectallele)
+table((data.merge$SBP_a1) == data.merge$AD_noneffectallele)
+```
+
+
+```{r}
+
+inconsistent=which((data.merge$SBP_a1) != data.merge$AD_effectallele 
+                   & (data.merge$SBP_a1) != data.merge$AD_noneffectallele)
+data.merge[inconsistent,]
+data.merge = data.merge[-inconsistent,]
+dim(data.merge)
+```
+
+```{r}
+
+# The harmonisation of the effect alleles can be performed as follows: 
+
+data.merge$AD_beta = ifelse((data.merge$SBP_a1) == data.merge$AD_effectallele,data.merge$AD_beta_not_aligned, -1*data.merge$AD_beta_not_aligned)
+```
+
+```{r}
+#Clump and prune
+#The algorithm needs to know the rs identifier of the genetic variants (labeled as rsid) and 
+#the $p$-value of the risk factor or exposure (labeled as pval). Rename the following columns accordingly:
+
+colnames(data.merge)[1]="rsid"
+colnames(data.merge)[7]="pval"
+
+data.clump = ieugwasr::ld_clump(data.merge)
+dim(data.clump)
+```
+
+```{r}
+write.csv(data.clump, file = "4.SBPADClumpedPrunedBellenguez2022.csv")
+```
+
+
+```{r}
+#Calculate instrument strength
+F=mean((data.merge$SBP_beta/data.merge$SBP_se)^2)
+F
+```
+
+# 5. Run the Mendelian Randomization 
+```{r}
+rs = data.clump$rsid
+SBP_beta = data.clump$SBP_beta
+SBP_se = data.clump$SBP_se
+AD_beta = data.clump$AD_beta
+AD_se = data.clump$AD_se
+
+mr.input = mr_input(bx = SBP_beta, bxse = SBP_se, by = AD_beta, byse = AD_se, 
+                    exposure = "Systolic Blood Pressure", outcome = "Alzheimer's Disease", snps = rs)
+mr_ivw(mr.input)
+mr_plot(mr.input, interactive=FALSE)
+
+```
+
+
+```{r}
+mr_allmethods(mr.input)
+mr_plot(mr_allmethods(mr.input, method = "main"))
+```
+
