@@ -1,0 +1,146 @@
+---
+title: "Depression-AD-Bellenguez2022"
+author: "Roopal Desai"
+date: "11/04/2022"
+output: pdf_document
+---
+
+```{r}
+rm(list=ls())
+```
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+library("plyr") 
+library("tidyverse")
+library("stringr") 
+library("vroom") 
+library("data.table") 
+library("MendelianRandomization") 
+library("ieugwasr")
+```
+
+# 1. Read in the data for Depression and create the genetic instrument at genome wide signifcance level 
+
+```{r}
+#Data = from Howard et al., 2019 public release of 10,000SNPs 
+#MarkerName - RS number of variant
+#A1 - Effect allelle
+#A2 - Alternative allele
+#Freq - Frequency of A1 allele
+#LogOR - Log odds ratio for A1 allele
+#StdErrLogOR - Standard error of log odds ratio for A1 allele
+#P - P-value
+
+
+
+Depression.data <- vroom("/Volumes/One Touch/Papers /11. RiskfactorsMRpaper /Data/Depression/Depression Howard  et al 2019/PGC_UKB_23andMe_depression_10000.txt")
+
+```
+
+```{r}
+dim(Depression.data)
+```
+
+```{r}
+head(Depression.data)
+```
+```{r}
+Depression.data = Depression.data %>% select("MarkerName","A1","A2","LogOR","StdErrLogOR","P")
+Depression.data = Depression.data %>% dplyr::rename(Dep_a1 = A1, Dep_a2 = A2, Dep_beta = LogOR, Dep_se = StdErrLogOR, Dep_pval = P)
+
+dim(Depression.data)
+```
+
+```{r}
+Dep.iv = Depression.data[which(Depression.data$Dep_pval <5*10^-8),]
+dim(Dep.iv)
+```
+
+#2. Read in the data for Alzheimer's disease 
+
+```{r}
+#AD data from Bellenguez et al., 2022 
+#Chromosome and position based on build GRCh38
+AD.data <- vroom("/Volumes/One Touch/Papers /11. RiskfactorsMRpaper /Data/Alzheimer's Disease/Bellenguez 2022/GCST90027158_buildGRCh38.tsv")
+head(AD.data)
+```
+
+
+```{r}
+AD.data = AD.data %>% select("variant_id","effect_allele","other_allele","beta","standard_error","p_value")
+AD.data = AD.data %>% dplyr::rename(AD_effectallele = effect_allele, AD_noneffectallele = other_allele, AD_beta_not_aligned = beta, AD_se = standard_error, AD_pval = p_value)
+```
+
+# 3. Merge the two data sets 
+
+```{r}
+colnames(AD.data)[1]=("MarkerName")
+data.merge =merge(Dep.iv, AD.data, by="MarkerName") 
+
+dim(data.merge)
+```
+
+# 4. Harmonise and Prune the merged data 
+
+```{r}
+
+# Create a TRUE/FALSE vector to indicate if Dep_a1 is equal to AD_effectallele. 
+
+table(toupper(data.merge$Dep_a1) == data.merge$AD_effectallele)
+table(toupper(data.merge$Dep_a1) == data.merge$AD_noneffectallele)
+```
+```{r}
+
+# The harmonisation of the effect alleles can be performed as below in this case we are just creating the variable AD_beta as all the alleles are aligned 
+
+data.merge$AD_beta = ifelse(toupper(data.merge$Dep_a1) == data.merge$AD_effectallele, 
+                                data.merge$AD_beta_not_aligned, -1*data.merge$AD_beta_not_aligned)
+```
+
+
+```{r}
+
+#Clump and prune
+
+#The final step is to prune or clump the SNPs. Pruning removes SNPs which are correlated 
+# (measured by the squared correlation r2). From a group of correlated SNPs it retains the one with the 
+# lowest $p$-value for the exposure. Use the function ieugwasr::ld_clump to prune the data. 
+#The algorithm needs to know the rs identifier of the genetic variants (labeled as rsid) and 
+#the $p$-value of the risk factor or exposure (labeled as pval). Rename the following columns accordingly:
+
+colnames(data.merge)[1]="rsid"
+colnames(data.merge)[6]="pval"
+
+
+data.clump = ieugwasr::ld_clump(data.merge)
+dim(data.clump)
+```
+
+```{r}
+#Calculate instrument strength
+F=mean((data.merge$Dep_beta/data.merge$Dep_se)^2)
+F
+```
+# 5. Run the Mendelian Randomization 
+
+
+```{r}
+rs = data.clump$rsid
+Depression_beta = data.clump$Dep_beta
+Depression_se = data.clump$Dep_se
+AD_beta = data.clump$AD_beta
+AD_se = data.clump$AD_se
+
+mr.input = mr_input(bx = Depression_beta, bxse = Depression_se, by = AD_beta, byse = AD_se, 
+                    exposure = "Depression", outcome = "Alzheimer's Disease", snps = rs)
+mr_ivw(mr.input)
+mr_plot(mr.input, interactive=FALSE)
+
+```
+
+```{r}
+mr_allmethods(mr.input)
+mr_plot(mr_allmethods(mr.input, method = "main"))
+```
+
+
