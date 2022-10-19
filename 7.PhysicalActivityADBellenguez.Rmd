@@ -1,0 +1,147 @@
+---
+title: "PhysicalActivity-AD-Bellenguez2022"
+author: "Roopal Desai"
+date: "11/04/2022"
+output: pdf_document
+---
+```{r}
+rm(list=ls())
+```
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+library("plyr") 
+library("tidyverse")
+library("stringr") 
+library("vroom") 
+library("data.table") 
+library("MendelianRandomization") 
+library("ieugwasr")
+```
+
+# 1. Read in the data for Physical Activity and create the genetic instrument at genome wide signifcance level 
+
+```{r}
+#Data = Klimentidis et al., 2018 
+#Fields in Summary Statistics file:
+#SNP: dnSNP name of genetic marker, if available
+#CHR: chromosome
+#BP: base-pair position on CHR (hg19 / b37)
+#ALLELE1:  effect allele
+#ALLELE0:  non-effect allele
+#BETA: effect size from BOLT-LMM approximation to infinitesimal mixed model
+#SE: standard error of effect size
+#P_BOLT_LMM_INF: infinitesimal mixed model association test p-value
+
+PhysicalActivity <- vroom("/Volumes/One Touch/Papers /Submitted/4. RiskfactorsMRpaper /Data/Physical Activity/VPA /Klimentidis_29899525_VPA_Model1_BOLTLMM_500K.txt")
+dim(PhysicalActivity)
+```
+```{r}
+head(PhysicalActivity)
+```
+
+```{r}
+PhysicalActivity = PhysicalActivity %>% select("SNP","ALLELE1","ALLELE0","BETA","SE","P_BOLT_LMM_INF")
+PhysicalActivity = PhysicalActivity %>% dplyr::rename(PhysicalActivity_a1 = ALLELE1, PhysicalActivity_a2 = ALLELE0, PhysicalActivity_beta = BETA, PhysicalActivity_se = SE, PhysicalActivity_pval = P_BOLT_LMM_INF)
+
+dim(PhysicalActivity)
+```
+
+```{r}
+PA.iv = PhysicalActivity[which(PhysicalActivity$PhysicalActivity_pval <5*10^-8),]
+dim(PA.iv)
+```
+
+
+#2. Read in the data for Alzheimer's disease 
+
+```{r}
+#AD data from Bellenguez et al., 2022 
+#Chromosome and position based on build GRCh38
+AD.data <- vroom("/Volumes/One Touch/Papers /Submitted/4. RiskfactorsMRpaper /Data/Alzheimer's Disease/Bellenguez 2022/GCST90027158_buildGRCh38.tsv")
+head(AD.data)
+```
+
+```{r}
+
+dim(AD.data)
+head(AD.data)
+```
+
+```{r}
+AD.data = AD.data %>% select("variant_id","effect_allele","other_allele","beta","standard_error","p_value")
+AD.data = AD.data %>% dplyr::rename(AD_effectallele = effect_allele, AD_noneffectallele = other_allele, AD_beta_not_aligned = beta, AD_se = standard_error, AD_pval = p_value)
+```
+
+# 3. Merge the two data sets 
+`
+```{r}
+colnames(AD.data)[1]=("SNP")
+
+data.merge =merge(PA.iv, AD.data, by="SNP") 
+
+dim(data.merge)
+```
+# 4. Harmonise and Prune the merged data 
+
+```{r}
+
+# Create a TRUE/FALSE vector to indicate if PhysicalActivity_a1 is equal to AD_effectallele. 
+table((data.merge$PhysicalActivity_a1) == data.merge$AD_effectallele)
+table((data.merge$PhysicalActivity_a1) == data.merge$AD_noneffectallele)
+```
+
+
+```{r}
+# The harmonisation of the effect alleles can be performed as follows: 
+
+data.merge$AD_beta = ifelse((data.merge$PhysicalActivity_a1) == data.merge$AD_effectallele, 
+                             data.merge$AD_beta_not_aligned, -1*data.merge$AD_beta_not_aligned)
+```
+
+
+```{r}
+
+#Clump and prune
+
+#The final step is to prune and clump the SNPs. Pruning removes SNPs which are correlated 
+# (measured by the squared correlation r2). From a group of correlated SNPs it retains the one with the 
+# lowest $p$-value for the exposure. Use the function ieugwasr::ld_clump to prune the data. 
+#The algorithm needs to know the rs identifier of the genetic variants (labeled as rsid) and 
+#the $p$-value of the risk factor or exposure (labeled as pval). Rename the following columns accordingly:
+
+colnames(data.merge)[1]="rsid"
+colnames(data.merge)[6]="pval"
+
+
+data.clump = ieugwasr::ld_clump(data.merge)
+dim(data.clump)
+```
+
+```{r}
+#Calculate instrument strength
+F=mean((data.merge$PhysicalActivity_beta/data.merge$PhysicalActivity_se)^2)
+F
+```
+
+# 5. Run the Mendelian Randomization 
+
+
+```{r}
+rs = data.clump$rsid
+PhysicalActivity_beta = data.clump$PhysicalActivity_beta
+PhysicalActivity_se = data.clump$PhysicalActivity_se
+AD_beta = data.clump$AD_beta
+AD_se = data.clump$AD_se
+
+mr.input = mr_input(bx = PhysicalActivity_beta, bxse = PhysicalActivity_se, by = AD_beta, byse = AD_se, 
+                    exposure = "Physical Activity", outcome = "Alzheimer's Disease", snps = rs)
+mr_ivw(mr.input)
+mr_plot(mr.input, interactive=FALSE)
+
+```
+```{r}
+mr_allmethods(mr.input)
+mr_plot(mr_allmethods(mr.input, method = "main"))
+```
+
+
