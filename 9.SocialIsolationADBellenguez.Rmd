@@ -1,0 +1,137 @@
+---
+title: "Social Isolation-AD-Bellenguez2022"
+author: "Roopal Desai"
+date: "11/04/2022"
+output: pdf_document
+---
+```{r}
+rm(list=ls())
+```
+
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+library("plyr") 
+library("tidyverse")
+library("stringr") 
+library("vroom") 
+library("data.table") 
+library("MendelianRandomization") 
+library("ieugwasr")
+```
+
+# 1. Read in the data for Loneliness and create the genetic instrument at genome wide signifcance level 
+
+```{r}
+#Data = from Day et al., 2019 on loneliness 
+#human genome build 19
+Loneliness <- vroom("/Volumes/One Touch/Papers /11. RiskfactorsMRpaper /Data/Social Isolation/LonelienssDay etal2018/MTAG_results.txt")
+dim(Loneliness)
+```
+
+
+```{r}
+head(Loneliness)
+```
+
+```{r}
+Loneliness = Loneliness %>% select("snpid","a1","a2","mtag_beta","mtag_se","mtag_pval")
+Loneliness = Loneliness %>% dplyr::rename(Loneliness_a1 = a1, Loneliness_a2 = a2, Loneliness_beta = mtag_beta, Loneliness_se = mtag_se, Loneliness_pval = mtag_pval)
+
+
+dim(Loneliness)
+```
+
+
+```{r}
+Loneliness.iv = Loneliness[which(Loneliness$Loneliness_pval <5*10^-8),]
+dim(Loneliness.iv)
+```
+
+
+#2. Read in the data for Alzheimer's disease 
+
+```{r}
+#AD data from Bellenguez et al., 2022 
+#Chromosome and position based on build GRCh38
+AD.data <- vroom("/Volumes/One Touch/Papers /11. RiskfactorsMRpaper /Data/Alzheimer's Disease/Bellenguez 2022/GCST90027158_buildGRCh38.tsv")
+head(AD.data)
+```
+
+
+```{r}
+AD.data = AD.data %>% select("variant_id","effect_allele","other_allele","beta","standard_error","p_value")
+AD.data = AD.data %>% dplyr::rename(AD_effectallele = effect_allele, AD_noneffectallele = other_allele, AD_beta_not_aligned = beta, AD_se = standard_error, AD_pval = p_value)
+```
+
+# 3. Merge the two data sets 
+
+```{r}
+
+colnames(AD.data)[1]=("snpid")
+
+data.merge =merge(Loneliness.iv, AD.data, by="snpid") 
+head(data.merge)
+```
+
+```{r}
+
+# Create a TRUE/FALSE vector to indicate if Loneliness_a1 is equal to AD_effectallele. 
+table((data.merge$Loneliness_a1) == data.merge$AD_effectallele)
+table((data.merge$Loneliness_a1) == data.merge$AD_noneffectallele)
+```
+
+
+```{r}
+# The harmonisation of the effect alleles can be performed as follows: 
+
+data.merge$AD_beta = ifelse((data.merge$Loneliness_a1) == data.merge$AD_effectallele,                                        data.merge$AD_beta_not_aligned,-1*data.merge$AD_beta_not_aligned)
+```
+
+```{r}
+
+#Clump and prune
+
+#The final step is to prune or clump the SNPs. Pruning removes SNPs which are correlated 
+# (measured by the squared correlation r2). From a group of correlated SNPs it retains the one with the 
+# lowest $p$-value for the exposure. Use the function ieugwasr::ld_clump to prune the data. 
+#The algorithm needs to know the rs identifier of the genetic variants (labeled as rsid) and 
+#the $p$-value of the risk factor or exposure (labeled as pval). Rename the following columns accordingly:
+
+colnames(data.merge)[1]="rsid"
+colnames(data.merge)[6]="pval"
+
+
+data.clump = ieugwasr::ld_clump(data.merge)
+dim(data.clump)
+```
+```{r}
+#Calculate instrument strength
+F=mean((data.merge$Loneliness_beta/data.merge$Loneliness_se)^2)
+F
+```
+
+# 5. Run the Mendelian Randomization 
+
+```{r}
+rs = data.clump$rsid
+Loneliness_beta = data.clump$Loneliness_beta
+Loneliness_se = data.clump$Loneliness_se
+AD_beta = data.clump$AD_beta
+AD_se = data.clump$AD_se
+
+mr.input = mr_input(bx = Loneliness_beta, bxse = Loneliness_se, by = AD_beta, byse = AD_se,
+                    exposure = "Loneliness", outcome = "Alzheimer's Disease", snps = rs)
+mr_ivw(mr.input)
+mr_plot(mr.input, interactive=FALSE)
+
+```
+
+```{r}
+mr_allmethods(mr.input)
+mr_plot(mr_allmethods(mr.input, method = "main"))
+```
+
+
+
+
+
