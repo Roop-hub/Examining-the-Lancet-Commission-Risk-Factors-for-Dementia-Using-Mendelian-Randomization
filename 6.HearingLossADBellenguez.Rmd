@@ -94,6 +94,16 @@ table((data.merge$ARHI_a1) == data.merge$AD_effectallele)
 table((data.merge$ARHI_a1) == data.merge$AD_noneffectallele)
 ```
 
+
+```{r}
+
+inconsistent=which((data.merge$ARHI_a1) != data.merge$AD_effectallele 
+                   & (data.merge$ARHI_a1) != data.merge$AD_noneffectallele)
+data.merge[inconsistent,]
+data.merge = data.merge[-inconsistent,]
+dim(data.merge)
+```
+
 ```{r}
 
 # The harmonisation of the effect alleles can be performed as follows: 
