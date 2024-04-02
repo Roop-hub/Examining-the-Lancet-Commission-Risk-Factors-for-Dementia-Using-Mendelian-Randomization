@@ -16,4 +16,3 @@ We include 10 files:
 (9)	Provides the code for the MR analysis of the risk factor of loneliness/social isolation and the outcome of Alzheimer’s disease. 
 (10)	Provides the code for the MR analysis of the risk factor of depression and the outcome of Alzheimer’s disease. 
  
-![image](https://user-images.githubusercontent.com/67968805/196741599-4c13c7d3-ade6-422e-8ad5-450f0fb9f61d.png)
